@@ -30,9 +30,117 @@ import secrets
 from .autopcr.util.pcr_data import get_id_from_name
 import traceback
 from .autopcr.util.logger import instance as logger
+import os # 新增：用于获取进程端口信息
+import re
+import requests
+import socket
+from typing import Optional
+import inspect  # 新增这一行
+from hoshino import log  # 确保 log 模块已导入
+logger = log.new_logger('auto_pcr')  # 初始化日志记录器
+def get_public_ip() -> str:
+    """获取服务器的公网IP（多重备选方案）"""
+    # 备选公网IP查询API列表
+    ip_apis = [
+        "https://api.ipify.org?format=json",
+        "https://ipinfo.io/json",
+        "http://ip-api.com/json",
+        "https://ifconfig.me/all.json",
+    ]
+    
+    # 尝试所有可用的API
+    for api_url in ip_apis:
+        try:
+            response = requests.get(api_url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                # 不同API返回的字段可能不同
+                if "ip" in data:
+                    return data["ip"]
+                elif "ip_addr" in data:
+                    return data["ip_addr"]
+        except:
+            continue  # 如果当前API失败，尝试下一个
+    
+    # 如果所有API都失败，尝试最后的手段（可能返回内网IP）
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        return local_ip  # 警告：可能是内网IP
+    except Exception as e:
+        raise ValueError(f"所有公网IP获取方法均失败，请手动填写！最后错误: {str(e)}")
 
-address = None  # 填你的公网IP或域名，不填则会自动尝试获取
-useHttps = False
+
+
+def get_hoshino_port() -> int:
+    """获取当前运行的HoshinoBot实际使用的端口号"""
+    try:
+        # 尝试从HoshinoBot配置文件中获取端口
+        from hoshino.config import __bot__ as bot_config
+        port = bot_config.PORT
+        print(f"ℹ️ 从HoshinoBot配置中获取到端口: {port}")
+        return port
+    except ImportError:
+        print("⚠️ 无法导入hoshino.config.__bot__，尝试从进程获取端口")
+    except AttributeError:
+        print("⚠️ 配置中没有PORT属性，尝试从进程获取端口")
+    
+    # 如果从配置文件获取失败，回退到原来的进程检测方法
+    try:
+        # 获取当前进程ID
+        current_pid = os.getpid()
+        
+        # 查找可能是HoshinoBot的Python进程
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'connections']):
+            try:
+                # 排除当前进程和非Python进程
+                if proc.info['pid'] == current_pid or 'python' not in proc.info['name'].lower():
+                    continue
+                
+                # 检查命令行参数是否包含hoshino相关字样
+                cmdline = ' '.join(proc.info['cmdline'] or [])
+                if 'hoshino' not in cmdline.lower():
+                    continue
+                
+                # 获取该进程监听的端口
+                for conn in proc.info['connections'] or []:
+                    if conn.status == 'LISTEN' and conn.laddr:
+                        return conn.laddr.port
+                        
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+                
+    except Exception as e:
+        print(f"⚠️ 无法从进程获取端口，使用默认8040。错误: {e}")
+    
+    return 8040  # 默认端口
+
+def generate_address() -> str:
+    """生成 address，格式 '公网IP:端口'"""
+    try:
+        public_ip = get_public_ip()
+        # 检查是否是明显的私有IP
+        if public_ip.startswith(("10.", "172.", "192.168.")) or public_ip == "127.0.0.1":
+            raise ValueError(f"获取到内网IP: {public_ip}，请检查网络配置！")
+        
+        port = get_hoshino_port()
+        print(f"ℹ️ 检测到运行中HoshinoBot使用的端口: {port}")  # 添加调试信息
+        return f"{public_ip}:{port}"
+    except ValueError as e:
+        print(f"❌ 错误: {e}")
+        return "请手动填写公网IP:端口"  # 获取失败时的占位文本
+
+# ===== 自动获取 address =====
+address = generate_address()
+print(f"ℹ️ 当前address: {address}")
+
+# 如果获取失败，建议手动填写
+if "手动填写" in address:
+    print("请手动修改下方address变量为你的公网IP和端口！")
+
+useHttps = False  # 默认HTTP
 
 server = HttpServer(qq_mod=True)
 app = nonebot.get_bot().server_app
@@ -71,8 +179,19 @@ sv_help = f"""
 - {prefix}一键编队 1 1 队名1 星级角色1 星级角色2 ... 星级角色5 队名2 星级角色1 星级角色2 END 设置多队编队，队伍不足5人以END结尾
 - {prefix}半月刊 查看半月刊
 - {prefix}识图 [图片] 识别图片中的角色，返回一键编队文本
+- {prefix}刷新box
+- {prefix}jjc透视 查前51名
+- {prefix}pjjc透视 查前51名
+- {prefix}jjc回刺 比如 #jjc回刺 19 2 就是打19 选择阵容2进攻
+- {prefix}pjjc回刺 比如 #pjjc回刺 -1（或者不填） 就是打记录里第一条 
+- {prefix}pjjc换防 将pjjc防守阵容随机错排
 - {prefix}免费十连 <卡池id> 卡池id来自【{prefix}卡池】
 - {prefix}来发十连 <卡池id> [抽到出] [单抽券|单抽] [编号小优先] [开抽] 赛博抽卡，谨慎使用。卡池id来自【{prefix}卡池】，[抽到出]表示抽到出货或达天井，默认十连，[单抽券]表示仅用厕纸，[单抽]表示宝石单抽，[标号小优先]指智能pickup时优先选择编号小的角色，[开抽]表示确认抽卡。已有up也可再次触发。
+- {prefix}大富翁 [保留的骰子数量] [搬空商店为止|不止搬空商店] [到达次数]运行大富翁游戏，支持设置保留骰子数量和是否搬空商店后停止
+  示例：{prefix}大富翁 30 不止搬空商店 0 | {prefix}大富翁所有 0 搬空商店为止  0（需要去批量运行里保存账号）
+- {prefix}商店购买 [上期|当期] 购买大富翁商店物品，默认购买当期
+  示例：{prefix}商店购买 上期 | {prefix}商店购买所有 当期 （需要去批量运行里保存账号）
+- {prefix}查玩家 uid
 """.strip()
 
 if address is None:
@@ -102,8 +221,8 @@ sv = Service(
     name="自动清日常",
     use_priv=priv.NORMAL,  # 使用权限
     manage_priv=priv.ADMIN,  # 管理权限
-    visible=False,  # False隐藏
-    enable_on_default=False,  # 是否默认启用
+    visible=True,  # False隐藏
+    enable_on_default=True,  # 是否默认启用
     bundle='pcr工具',  # 属于哪一类
     help_=sv_help  # 帮助文本
 )
@@ -702,7 +821,117 @@ async def cron_statistic(botev: BotEvent):
 @sv.on_fullmatch(f"{prefix}配置日常")
 @wrap_hoshino_event
 async def config_clear_daily(botev: BotEvent):
-    await botev.finish(address + "login")
+    await botev.finish("https://eeeum.dynv6.net:8089/daily/login（仅ipv6）或https://autopcr.dpdns.org/daily/login （可能需要扶梯）")#写死配置页面
+
+
+async def send_llonebot_forward(botev, alias: str, content: str):
+    """
+    LLOneBot专用合并转发函数（修正版，固定3段，每段34行）
+    参数:
+        botev: 事件对象
+        alias: 显示名称
+        content: 要发送的内容
+    """
+    try:
+        # 1. 安全获取所有必要参数
+        bot = getattr(botev, 'bot', None)
+        if not bot:
+            raise ValueError("无法获取bot实例")
+
+        # 获取机器人ID（带默认值）
+        bot_id = str(getattr(bot, 'self_id', '10000'))
+
+        # 安全获取source_id（处理协程、方法和属性三种情况）
+        async def safe_get_id(attr_name: str) -> int:
+            attr = getattr(botev, attr_name, None)
+            if attr is None:
+                return None
+            if inspect.iscoroutinefunction(attr):  # 协程函数
+                try:
+                    result = await attr()
+                    return int(result)
+                except Exception as e:
+                    logger.error(f"获取{attr_name}失败(协程): {str(e)}")
+                    return None
+            elif callable(attr):  # 普通方法
+                try:
+                    return int(attr())
+                except Exception as e:
+                    logger.error(f"获取{attr_name}失败(方法): {str(e)}")
+                    return None
+            else:  # 普通属性
+                try:
+                    return int(attr)
+                except Exception as e:
+                    logger.error(f"获取{attr_name}失败(属性): {str(e)}")
+                    return None
+
+        # 优先尝试获取群号，失败则获取用户QQ号
+        group_id = await safe_get_id('group_id')
+        user_id = await safe_get_id('user_id')
+        source_id = group_id or user_id
+        if not source_id:
+            raise ValueError("无法获取消息来源ID")
+
+        message_type = "group" if group_id else "private"
+
+        # 2. 分割内容为3段，每段34行
+        lines = str(content).splitlines()
+        total_lines = len(lines)
+        chunk_size = 34  # 每段34行
+        num_chunks = 3  # 分成3段
+
+        # 计算实际分段（如果总行数不足，则按实际行数分割）
+        messages = []
+        for i in range(num_chunks):
+            start = i * chunk_size
+            end = (i + 1) * chunk_size if (i + 1) * chunk_size <= total_lines else total_lines
+            chunk = lines[start:end]
+            if not chunk:  # 如果最后一段是空的，跳过
+                continue
+            messages.append({
+                "type": "node",
+                "data": {
+                    "name": str(alias),
+                    "uin": bot_id,
+                    "content": "\n".join(chunk).strip()
+                }
+            })
+
+        # 3. 发送消息
+        if message_type == "group":
+            await bot.send_group_forward_msg(
+                group_id=int(source_id),
+                messages=messages
+            )
+        else:
+            for msg in messages:
+                await bot.send_private_msg(
+                    user_id=int(source_id),
+                    message=msg["data"]["content"]
+                )
+                await asyncio.sleep(0.5)  # 防止消息速率限制
+                
+    except Exception as e:
+        logger.error(f"合并转发失败: {str(e)}")
+        # 降级为普通消息发送
+        try:
+            # 直接发送原始内容，分成3段
+            lines = str(content).splitlines()
+            total_lines = len(lines)
+            chunk_size = 34
+            num_chunks = 3
+
+            for i in range(num_chunks):
+                start = i * chunk_size
+                end = (i + 1) * chunk_size if (i + 1) * chunk_size <= total_lines else total_lines
+                chunk = lines[start:end]
+                if not chunk:
+                    continue
+                await botev.send("\n".join(chunk).strip())
+                await asyncio.sleep(0.5)
+        except Exception as fallback_error:
+            logger.error(f"降级发送也失败: {str(fallback_error)}")
 
 @sv.on_prefix(f"{prefix}")
 @wrap_hoshino_event
@@ -729,18 +958,31 @@ async def tool_used(botev: BotEvent, tool: ToolInfo, config: Dict[str, str], acc
                 await botev.send("未选择账号！请到网页端批量运行选择账号后运行")
                 return
         resp = resp.get_result()
-        if export:
-            data = await export_excel(resp.table)
-            timestamp = db.format_time_safe(datetime.datetime.now())
-            await upload_excel(botev, data, f"{tool.name}_{alias}_{timestamp}.xlsx", 'autopcr')
-        else:
+        
+        # 仅对查公会深域进度工具生成图片
+        if tool.key == "find_clan_talent_quest":
+            # 生成深域进度图片
             img = await drawer.draw_task_result(resp)
             msg = f"{alias}"
             msg += outp_b64(img)
             await botev.send(msg)
+        else:
+            # 其他工具保持原有文本处理逻辑
+            if export:
+                data = await export_excel(resp.table)
+                timestamp = db.format_time_safe(datetime.datetime.now())
+                await upload_excel(botev, data, f"{tool.name}_{alias}_{timestamp}.xlsx", 'autopcr')
+            else:
+                result_text = str(resp.log) if hasattr(resp, 'log') else str(resp)
+                result_text = result_text.replace('\\n', '\n').replace('\n', '\n')
+                await send_llonebot_forward(botev, alias, result_text)
     except Exception as e:
         logger.exception(e)
-        await botev.send(f'{alias}: {e}')
+        error_msg = f"{alias} 任务执行失败（如果是指令+所有必须去网站-批量运行-BATCH_RUNNER 里保存队伍）：{str(e)[:500]}"
+        try:
+            await botev.send(error_msg)
+        except:
+            logger.error("发送错误消息失败")
 
 @sv.on_fullmatch(f"{prefix}卡池")
 @wrap_hoshino_event
@@ -761,6 +1003,159 @@ async def clan_support(botev: BotEvent):
 @register_tool("查心碎", "get_need_xinsui")
 async def find_xinsui(botev: BotEvent):
     return {}
+
+@register_tool("jjc回刺", "jjc_back")
+async def jjc_back(botev: BotEvent):
+    msg = await botev.message()
+
+    opponent_jjc_rank = -1
+    opponent_jjc_attack_team_id = 1
+    try:
+        opponent_jjc_rank = int(msg[0])
+        del msg[0]
+    except:
+        pass
+    try:
+        opponent_jjc_attack_team_id = int(msg[0])
+        del msg[0]
+    except:
+        pass
+    config = {
+        "opponent_jjc_rank": opponent_jjc_rank,
+        "opponent_jjc_attack_team_id": opponent_jjc_attack_team_id,
+    }
+    return config
+    
+@register_tool("设置编队", "set_my_party")
+async def set_my_party(botev: BotEvent):
+    msg = await botev.message()
+
+    party_start_num = 1
+    tab_start_num = 1
+    set_my_party_text = "自定义编队\n"
+    try:
+        tab_start_num = int(msg[0])
+        del msg[0]
+    except:
+        pass
+    try:
+        party_start_num = int(msg[0])
+        del msg[0]
+    except:
+        pass
+    units = []
+    unknown_units = []
+    for _ in range(5):
+        try:
+            unit_name = msg[0]
+            unit = get_id_from_name(unit_name)
+            if unit:
+                units.append(unit)
+            else:
+                unknown_units.append(unit_name)
+            del msg[0]
+        except:
+            pass
+    if unknown_units:
+        await botev.finish(f"未知昵称{', '.join(unknown_units)}")
+    if not units:
+        await botev.finish("未指定任何角色")
+    if len(units) < 5:
+        await botev.finish("需要5个角色")
+    set_my_party_text += "\n".join(f"{unit * 100 + 1}\t{db.get_unit_name(unit*100+1)}\t1\t{6 if unit*100+1 in db.unit_to_pure_memory else 5}" for unit in units)
+    config = {
+        "tab_start_num": tab_start_num,
+        "party_start_num": party_start_num,
+        "set_my_party_text": set_my_party_text,
+    }
+    return config
+ 
+@register_tool("导入编队", "set_my_party")
+async def set_my_party(botev: BotEvent):
+    msg = await botev.message()
+
+    party_start_num = 1
+    tab_start_num = 1
+    try:
+        tab_start_num = int(msg[0])
+        del msg[0]
+    except:
+        pass
+    try:
+        party_start_num = int(msg[0])
+        del msg[0]
+    except:
+        pass
+    units = []
+    unknown_units = []
+    for _ in range(5):
+        try:
+            unit_name = msg[0]
+            unit = get_id_from_name(unit_name)
+            if unit:
+                units.append(unit)
+            else:
+                unknown_units.append(unit_name)
+            del msg[0]
+        except:
+            pass
+    if unknown_units:
+        await botev.finish(f"未知昵称{', '.join(unknown_units)}")
+    config = {
+        "tab_start_num": tab_start_num,
+        "party_start_num": party_start_num,
+    }
+    return config
+
+@register_tool("pjjc回刺", "pjjc_back")
+async def pjjc_back(botev: BotEvent):
+    msg = await botev.message()
+
+    opponent_pjjc_rank = -1
+    opponent_pjjc_attack_team_id = 1
+    try:
+        opponent_pjjc_rank = int(msg[0])
+        del msg[0]
+    except:
+        pass
+    try:
+        opponent_pjjc_attack_team_id = int(msg[0])
+        del msg[0]
+    except:
+        pass
+    config = {
+        "opponent_pjjc_rank": opponent_pjjc_rank,
+        "opponent_pjjc_attack_team_id": opponent_pjjc_attack_team_id,
+    }
+    return config
+
+@register_tool("jjc透视", "jjc_info")
+async def jjc_info(botev: BotEvent):
+    use_cache = True
+    msg = await botev.message()
+
+    try:
+        use_cache = not is_args_exist(msg, 'flush')
+    except:
+        pass
+    config = {
+        "jjc_info_cache": use_cache,
+    }
+    return config
+
+@register_tool("pjjc透视", "pjjc_info")
+async def pjjc_info(botev: BotEvent):
+    use_cache = True
+    msg = await botev.message()
+
+    try:
+        use_cache = not is_args_exist(msg, 'flush')
+    except:
+        pass
+    config = {
+        "pjjc_info_cache": use_cache,
+    }
+    return config
 
 @register_tool("查记忆碎片", "get_need_memory")
 async def find_memory(botev: BotEvent):
@@ -902,6 +1297,35 @@ async def quest_recommand(botev: BotEvent):
     return config
 
 
+@register_tool("pjjc换防", "pjjc_def_shuffle_team")
+async def pjjc_def_shuffle_team(botev: BotEvent):
+
+    return {}
+
+@register_tool("pjjc换攻", "pjjc_atk_shuffle_team")
+async def pjjc_atk_shuffle_team(botev: BotEvent):
+
+    return {}
+    
+@register_tool("查玩家", "query_player_profile")
+async def query_player_profile(botev: BotEvent):
+
+    msg = await botev.message()
+    target_viewer_id = ""
+    try:
+        target_viewer_id = msg[0]
+        del msg[0]
+    except:
+        await botev.finish("请输入玩家ID")
+    
+    if not target_viewer_id.isdigit():
+        await botev.finish("玩家ID必须是数字")
+    
+    config = {
+        "target_viewer_id": target_viewer_id
+    }
+    return config
+    
 @register_tool("查缺角色", "missing_unit")
 async def find_missing_unit(botev: BotEvent):
     return {}
@@ -964,6 +1388,81 @@ async def redeem_unit_swap(botev: BotEvent):
     }
     return config
 
+@register_tool("查公会深域进度", "find_clan_talent_quest")
+async def find_clan_talent_quest(botev: BotEvent):
+
+    return {}
+
+
+@register_tool("兑天井", "gacha_exchange_chara")
+async def gacha_exchange_chara(botev: BotEvent):
+
+    msg = await botev.message()
+    gacha_id = ""
+    unit_name = ""
+    try:
+        gacha_id = msg[0]
+        del msg[0]
+    except:
+        pass
+    try:
+        unit_name = msg[0]
+        del msg[0]
+    except:
+        pass
+
+    current_gacha = {gacha.split(':')[0]: gacha for gacha in db.get_cur_gacha()}
+
+    if gacha_id not in current_gacha:
+        await botev.finish(f"未找到该卡池{gacha_id}")
+
+    unit = get_id_from_name(unit_name)
+    if not unit:
+        await botev.finish(f"未知角色名{unit_name}")
+
+    config = {
+        "gacha_exchange_pool_id": current_gacha[gacha_id],
+        "gacha_exchange_unit_id": unit * 100 + 1
+    }
+    return config
+
+@register_tool("大富翁", "caravan_play")
+async def caravan_play(botev: BotEvent):
+    msg = await botev.message()
+    # 发送任务正在进行提示
+    await botev.send("好的，马上进行大富翁任务")
+    # 默认配置：保留0个骰子，搬空商店为止，到达终点次数0
+    config = {
+        "caravan_play_dice_hold_num": 0,
+        "caravan_play_until_shop_empty": True,
+        "caravan_play_goal_num": 0
+    }
+    
+    try:
+        # 解析参数（按顺序：保留骰子数量 -> 商店设置 -> 到达终点次数）
+        # 解析保留骰子数量
+        if msg and msg[0].isdigit():
+            config["caravan_play_dice_hold_num"] = int(msg[0])
+            msg.pop(0)
+        
+        # 解析是否搬空商店
+        if msg and msg[0] in ["搬空商店为止", "不止搬空商店"]:
+            config["caravan_play_until_shop_empty"] = (msg[0] == "搬空商店为止")
+            msg.pop(0)
+        
+        # 解析到达终点次数（第三个参数）
+        if msg and msg[0].isdigit():
+            config["caravan_play_goal_num"] = int(msg[0])
+            msg.pop(0)
+    
+    except Exception as e:
+        logger.warning(f"解析大富翁参数出错: {e}")
+    
+    # 检查未识别参数
+    if msg:
+        await botev.finish(f"未知的参数：【{' '.join(msg)}】")
+    
+    return config
 @register_tool("半月刊", "half_schedule")
 async def half_schedule(botev: BotEvent):
     return {}
