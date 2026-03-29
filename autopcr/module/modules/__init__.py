@@ -169,6 +169,7 @@ unit_modules = ModuleList(
     '角色',
     'unit',
     [
+        one_click_ex_equip,
         search_unit,
         missing_unit,
         refresh_box,
@@ -177,6 +178,7 @@ unit_modules = ModuleList(
         unit_set_unique_equip_growth,
         unit_exceed,
         unit_evolution,
+        search_ex_equip_id,
     ]
 )
 
@@ -210,7 +212,11 @@ tool_modules = ModuleList(
         ex_equip_rainbow_enchance,
         ex_equip_power_maximun,
         set_my_party2,
+		set_cb_support,#会战支援
+		set_dungeon_support,  
+        set_friend_support,
         find_talent_quest,
+		search_ex_equip_id,
         find_clan_talent_quest,
         # return_jewel,
         # cook_pudding,
