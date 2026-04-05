@@ -1,9 +1,8 @@
 from typing import List, Set
 
 from ...util.ilp_solver import memory_use_average
-from ...model.common import ChangeRarityUnit, DeckListData, ExtraEquipChangeSlot, ExtraEquipChangeUnit, GachaPointInfo, GrandArenaHistoryDetailInfo, GrandArenaHistoryInfo, GrandArenaSearchOpponent, ProfileUserInfo, RankingSearchOpponent, RedeemUnitInfo, RedeemUnitSlotInfo, UnitData, UnitDataLight, VersusResult, VersusResultDetail
 import time
-from ...model.common import ChangeRarityUnit, DeckListData, GachaPointInfo, GrandArenaHistoryDetailInfo, GrandArenaHistoryInfo, GrandArenaSearchOpponent, ProfileUserInfo, RankingSearchOpponent, RedeemUnitInfo, RedeemUnitSlotInfo, UnitData, UnitDataLight, VersusResult, VersusResultDetail
+from ...model.common import ChangeRarityUnit, DeckListData, ExtraEquipChangeSlot, ExtraEquipChangeUnit, GachaPointInfo, GrandArenaHistoryDetailInfo, GrandArenaHistoryInfo, GrandArenaSearchOpponent, ProfileUserInfo, RankingSearchOpponent, RedeemUnitInfo, RedeemUnitSlotInfo, UnitData, UnitDataLight, VersusResult, VersusResultDetail
 from ...model.responses import GachaIndexResponse, PsyTopResponse
 from ...db.models import GachaExchangeLineup
 from ...model.custom import ArenaQueryResult, ArenaQueryType, GachaReward, ItemType, eRedeemUnitUnlockCondition
@@ -776,12 +775,20 @@ class jjc_back(Arena):
 
     def present_defend(self, defen: List[int]) -> str:
         msg = [db.get_unit_name(x) for x in defen]
-        msg = f"防守方【{' '.join(msg)}】"
+        msg = f"防守方 {' '.join(msg)}"  
         return msg
 
     def present_attack(self, attack: List[ArenaQueryResult]) -> str:
-        msg = ArenaQuery.str_result(attack)
-        return msg
+        lines = []  
+        for id, ret in enumerate(attack):  
+            unit_names = ' '.join([db.get_unit_name(unit.id) for unit in ret.atk])  
+            suffix = ""  
+            if ret.query_type == ArenaQueryType.APPROXIMATION:  
+                suffix = "(近似解)"  
+            elif ret.query_type == ArenaQueryType.PLACEHOLDER:  
+                suffix = "(凑解)"  
+            lines.append(f"第{id + 1}解.{ret.up}/{ret.down} {unit_names}{suffix}")  
+        return '\n'.join(lines)
 
     async def choose_best_team(self, team: List[ArenaQueryResult], rank_id: List[int], client: pcrclient) -> int: 
         id = int(self.get_config("opponent_jjc_attack_team_id")) - 1
@@ -1039,8 +1046,8 @@ class pjjc_def_shuffle_team(PJJCShuffleTeam):
         if limit_info.daily_times == limit_info.daily_max_limited_times:
             raise AbortError(f"已达到换防次数上限{limit_info.daily_max_limited_times}，请于明日再试")
         msg = f"{db.format_time(db.parse_time(limit_info.round_end_time))}刷新" if limit_info.round_times else ""
-        self._log(f'''本轮换防次数{limit_info.round_times}/{limit_info.round_max_limited_times}，{msg}
-今日换防次数{limit_info.daily_times}/{limit_info.daily_max_limited_times}''')
+        self._log(f'''本轮换防次数{limit_info.round_times + 1}/{limit_info.round_max_limited_times}，{msg}
+今日换防次数{limit_info.daily_times + 1}/{limit_info.daily_max_limited_times}''')
 
 @description('获得可导入到兰德索尔图书馆的账号数据')
 @name('兰德索尔图书馆导入数据')
@@ -1197,36 +1204,6 @@ class get_normal_quest_recommand(Module):
 
         msg = '\n--------\n'.join(tot)
         self._log(msg)
-
-# @inttype("start_rank", "起始品级", 1, [i for i in range(1, 99)])
-# @booltype("like_unit_only", "收藏角色", False)
-# @description('根据装备缺口计算刷图优先级，越前的优先度越高')
-# @name('刷图推荐(弃用)')
-# @notlogin(check_data = True)
-# @default(True)
-# class get_normal_quest_recommand(Module):
-#     async def do_task(self, client: pcrclient):
-#         start_rank: int = self.get_config("start_rank")
-#         like_unit_only: bool = self.get_config("like_unit_only")
-#
-#         quest_list: List[int] = [id for id, quest in db.normal_quest_data.items() if db.parse_time(quest.start_time) <= apiclient.datetime]
-#         require_equip = client.data.get_equip_demand_gap(start_rank = start_rank, like_unit_only = like_unit_only)
-#         quest_weight = client.data.get_quest_weght(require_equip)
-#         quest_id = sorted(quest_list, key = lambda x: quest_weight[x], reverse = True)
-#         tot = []
-#         for i in range(5):
-#             id = quest_id[i]
-#             name = db.get_quest_name(id)
-#             tokens: List[ItemType] = [i for i in db.normal_quest_rewards[id]]
-#             msg = f"{name}:\n" + '\n'.join([
-#                 (f'{db.get_inventory_name_san(token)}: {"缺少" if require_equip[token] > 0 else "盈余"}{abs(require_equip[token])}片')
-#                 for token in tokens
-#                 if require_equip[token] > -100
-#                 ])
-#             tot.append(msg.strip())
-#
-#         msg = '\n--------\n'.join(tot)
-#         self._log(msg)
 
 @description('从指定面板的指定队开始清除指定数量的编队')
 @inttype("clear_team_num", "队伍数", 1, [i for i in range(1, 21)])
@@ -1394,43 +1371,8 @@ class set_my_party(SetMyParty):
 
         return token
 
-@description('计算等级同步返钻数量')
-@name('返钻计算')
-@notlogin(check_data = True)
-@default(True)
-class return_jewel(Module):
-    async def do_task(self, client: pcrclient):
-        import math
-        max_unit_rarity, max_promotion_level = 31, 305
-        return_jewel_count = 0
-        
-        units = list(client.data.unit.values())
-        count_unit = len(units)
-        
-        promo_levels = sorted([u.promotion_level for u in units], reverse=True)
-        unit_levels = sorted([u.unit_level for u in units], reverse=True)
-
-        value1 = sum(promo_levels[20:]) - len(promo_levels[20:])
-        value2 = sum(unit_levels[20:]) - len(unit_levels[20:])
-
-        return_jewel_count = 1500 + (value1 + value2 / 10) / 2
-        return_jewel_count_10 = math.ceil(return_jewel_count / 10) * 10
-        
-        count_max_rarity = count_max_level = 0
-        for unit in units:
-            count_max_rarity += unit.promotion_level == max_unit_rarity
-            count_max_level += unit.unit_level == max_promotion_level
-        
-        max_return_jewel_count = math.ceil((1500 + (count_unit - 20) * (max_unit_rarity - 1 + (max_promotion_level - 1) / 10) / 2) / 10) * 10
-
-        self._log(f"当前角色数: {count_unit}")
-        self._log(f"当前处于最大品级角色数: {count_max_rarity}")
-        self._log(f"当前处于最大突破等级角色数: {count_max_level}")
-        self._log(f"返钻数量: {return_jewel_count} (向上取整实际获得: {return_jewel_count_10})")
-        self._log(f"当前box最多返钻数量: {max_return_jewel_count}")
-
-
-
+# tools.py, 在 set_cb_support 类之前新增  
+  
 async def _remove_unit_from_other_supports(client: pcrclient, support_info, unit_ids, target_support_type, target_positions, now, log_func, warn_func):  
     """  
     检查 unit_ids 中的角色是否在其他类型的支援位中，如果在则先撤下。  
@@ -1485,11 +1427,13 @@ async def _remove_unit_from_other_supports(client: pcrclient, support_info, unit
   
     return blocked_units
 
-@name('挂会战支援')  
-@default(True)  
-@unitchoice("set_cb_support_unit_id_2", "角色2（选填）")  
-@unitchoice("set_cb_support_unit_id_1", "角色1")  
-@description('设置指定角色为会战支援（最多2个），并自动穿满会战EX装备')  
+@name('挂会战支援')    
+@default(True)    
+@inttype("set_cb_support_star_2", "角色2星级", 0, [0, 3, 4, 5])  
+@inttype("set_cb_support_star_1", "角色1星级", 0, [0, 3, 4, 5])  
+@unitchoice("set_cb_support_unit_id_2", "角色2（选填）")    
+@unitchoice("set_cb_support_unit_id_1", "角色1")    
+@description('设置指定角色为会战支援（最多2个），并自动穿满会战EX装备，支持调星级')    
 class set_cb_support(Module):  
     async def do_task(self, client: pcrclient):  
         SUPPORT_COOLDOWN = 1800  
@@ -1651,14 +1595,45 @@ class set_cb_support(Module):
             except Exception as e:  
                 self._warn(f"{db.get_unit_name(uid)} EX装备失败: {e}")  
   
+        # 调整星级  
+        star_map = {}  
+        if unit_id_1 and unit_id_1 in client.data.unit:  
+            star_map[unit_id_1] = int(self.get_config('set_cb_support_star_1'))  
+        if unit_id_2 and unit_id_2 in client.data.unit and unit_id_2 != unit_id_1:  
+            star_map[unit_id_2] = int(self.get_config('set_cb_support_star_2'))  
+          
+        change_rarity_list = []  
+        for uid in unit_ids:  
+            target_star = star_map.get(uid, 0)  
+            if target_star == 0:  
+                continue  
+            if uid not in client.data.unit:  
+                continue  
+            unit_data = client.data.unit[uid]  
+            if unit_data.unit_rarity != 5:  
+                self._warn(f"{db.get_unit_name(uid)}不是5星角色，无法调星")  
+                continue  
+            now_star = unit_data.battle_rarity if unit_data.battle_rarity else unit_data.unit_rarity  
+            if target_star == now_star:  
+                continue  
+            if 3 <= target_star <= 5 and 3 <= now_star <= 5:  
+                change_rarity_list.append(ChangeRarityUnit(unit_id=uid, battle_rarity=target_star))  
+                self._log(f"将{db.get_unit_name(uid)}星级从{now_star}调至{target_star}")  
+            else:  
+                self._warn(f"{db.get_unit_name(uid)}星级无法从{now_star}调至{target_star}")  
+        if change_rarity_list:  
+            await client.unit_change_rarity(change_rarity_list)
+            
         if not self.log:  
             raise SkipError("无操作")
        
-@name('挂地下城支援')  
-@default(True)  
-@unitchoice("set_dungeon_support_unit_id_2", "角色2（选填）")  
-@unitchoice("set_dungeon_support_unit_id_1", "角色1")  
-@description('设置指定角色为地下城支援（最多2个）')  
+@name('挂地下城支援')    
+@default(True)    
+@inttype("set_dungeon_support_star_2", "角色2星级", 0, [0, 3, 4, 5])  
+@inttype("set_dungeon_support_star_1", "角色1星级", 0, [0, 3, 4, 5])  
+@unitchoice("set_dungeon_support_unit_id_2", "角色2（选填）")    
+@unitchoice("set_dungeon_support_unit_id_1", "角色1")    
+@description('设置指定角色为地下城支援（最多2个），支持调星级') 
 class set_dungeon_support(Module):  
     async def do_task(self, client: pcrclient):  
         SUPPORT_COOLDOWN = 1800  
@@ -1758,17 +1733,46 @@ class set_dungeon_support(Module):
             await client.support_unit_change_setting(1, target_pos, 1, uid)  
             already_set[uid] = target_pos  
             occupied_positions.add(target_pos)  
-            self._log(f"已设置{unit_name}为地下城支援位{target_pos}")  
+            self._log(f"已设置{unit_name}为地下城支援位{target_pos}")             
   
+        # 调整星级  
+        star_configs = {  
+            unit_id_1: int(self.get_config('set_dungeon_support_star_1')),  
+            unit_id_2: int(self.get_config('set_dungeon_support_star_2')),  
+        }  
+        change_rarity_list = []  
+        for uid in unit_ids:  
+            target_star = star_configs.get(uid, 0)  
+            if target_star == 0:  
+                continue  
+            if uid not in client.data.unit:  
+                continue  
+            unit_data = client.data.unit[uid]  
+            if unit_data.unit_rarity != 5:  
+                self._warn(f"{db.get_unit_name(uid)}不是5星角色，无法调星")  
+                continue  
+            now_star = unit_data.battle_rarity if unit_data.battle_rarity else unit_data.unit_rarity  
+            if target_star == now_star:  
+                continue  
+            if 3 <= target_star <= 5 and 3 <= now_star <= 5:  
+                change_rarity_list.append(ChangeRarityUnit(unit_id=uid, battle_rarity=target_star))  
+                self._log(f"将{db.get_unit_name(uid)}星级从{now_star}调至{target_star}")  
+            else:  
+                self._warn(f"{db.get_unit_name(uid)}星级无法从{now_star}调至{target_star}")  
+        if change_rarity_list:  
+            await client.unit_change_rarity(change_rarity_list)
+            
         if not self.log:  
             raise SkipError("无操作")
             
             
-@name('挂好友支援')  
-@default(True)  
-@unitchoice("set_friend_support_unit_id_2", "角色2（选填）")  
-@unitchoice("set_friend_support_unit_id_1", "角色1")  
-@description('设置指定角色为好友支援（最多2个），好友可在关卡中借用')  
+@name('挂好友支援')    
+@default(True)    
+@inttype("set_friend_support_star_2", "角色2星级", 0, [0, 3, 4, 5])  
+@inttype("set_friend_support_star_1", "角色1星级", 0, [0, 3, 4, 5])  
+@unitchoice("set_friend_support_unit_id_2", "角色2（选填）")    
+@unitchoice("set_friend_support_unit_id_1", "角色1")    
+@description('设置指定角色为好友支援（最多2个），好友可在关卡中借用，支持调星级')
 class set_friend_support(Module):  
     async def do_task(self, client: pcrclient):  
         SUPPORT_COOLDOWN = 1800  
@@ -1869,6 +1873,33 @@ class set_friend_support(Module):
             occupied_positions.add(target_pos)  
             self._log(f"已设置{unit_name}为好友支援位{target_pos}")  
   
+        # 调整星级  
+        star_configs = {  
+            unit_id_1: int(self.get_config('set_friend_support_star_1')),  
+            unit_id_2: int(self.get_config('set_friend_support_star_2')),  
+        }  
+        change_rarity_list = []  
+        for uid in unit_ids:  
+            target_star = star_configs.get(uid, 0)  
+            if target_star == 0:  
+                continue  
+            if uid not in client.data.unit:  
+                continue  
+            unit_data = client.data.unit[uid]  
+            if unit_data.unit_rarity != 5:  
+                self._warn(f"{db.get_unit_name(uid)}不是5星角色，无法调星")  
+                continue  
+            now_star = unit_data.battle_rarity if unit_data.battle_rarity else unit_data.unit_rarity  
+            if target_star == now_star:  
+                continue  
+            if 3 <= target_star <= 5 and 3 <= now_star <= 5:  
+                change_rarity_list.append(ChangeRarityUnit(unit_id=uid, battle_rarity=target_star))  
+                self._log(f"将{db.get_unit_name(uid)}星级从{now_star}调至{target_star}")  
+            else:  
+                self._warn(f"{db.get_unit_name(uid)}星级无法从{now_star}调至{target_star}")  
+        if change_rarity_list:  
+            await client.unit_change_rarity(change_rarity_list)
+            
         if not self.log:  
             raise SkipError("无操作")          
        
@@ -1925,7 +1956,7 @@ class search_ex_equip_id(Module):
 @default(True)  
 @texttype('one_click_ex_selection', '选择(试穿/数字如 1 1 2)', '试穿')  
 @unitchoice('one_click_ex_unit_id', '角色')  
-@description('试穿模式：显示每个槽位可选的EX装备及属性。数字模式(如 1 1 2)：选择每个槽位的第N个装备并穿上，0表示不改动。从其他角色拿装备时会互换而非卸下。')  
+@description('试穿模式：显示每个槽位可选的EX装备及属性。数字模式(如 1 1 2)：选择每个槽位的第N个装备并穿上，0表示不改动。多件在他人身上时可用字母后缀指定从谁换(如 1A 1 2)。从其他角色拿装备时会互换而非卸下。')  
 class one_click_ex_equip(Module):  
     async def do_task(self, client: pcrclient):  
         unit_id = int(self.get_config('one_click_ex_unit_id'))  
@@ -1973,6 +2004,7 @@ class one_click_ex_equip(Module):
                 ),  
                 reverse=True,  
             ):  
+                rarity = db.ex_equipment_data[ex_id].rarity  
                 attr = db.ex_equipment_data[ex_id].get_unit_attribute(star)  
                 bonus = unit_attr.ex_equipment_mul(attr).ceil()  
                 power = int(bonus.get_power(coefficient) + 0.5)  
@@ -1987,13 +2019,26 @@ class one_click_ex_equip(Module):
                 attr_str = "/".join(attr_parts) if attr_parts else "无属性"  
   
                 equip_name = db.get_ex_equip_name(ex_id)  
-                serial_ids = sorted(  
-                    [e.serial_id for e in ex_list],  
-                    key=lambda sid: sid in equip_on_unit,  
-                )  
-                on_others = [(equip_on_unit[sid], sid) for sid in serial_ids if sid in equip_on_unit and equip_on_unit[sid][0] != unit_id]  
   
-                candidates.append((ex_id, star, equip_name, attr_str, power, serial_ids, on_others))  
+                if rarity == 5:  
+                    # 彩装：每件单独列出，附带词条  
+                    for ex in sorted(ex_list, key=lambda e: e.serial_id in equip_on_unit):  
+                        sub_str = db.get_ex_equip_sub_status_str(ex.ex_equipment_id, ex.sub_status or [])  
+                        sid = ex.serial_id  
+                        on_others = [  
+                            (equip_on_unit[sid], sid)  
+                            for sid in [sid]  
+                            if sid in equip_on_unit and equip_on_unit[sid][0] != unit_id  
+                        ]  
+                        candidates.append((ex_id, star, equip_name, attr_str, power, [sid], on_others, sub_str))  
+                else:  
+                    # 非彩装：保持原有分组逻辑  
+                    serial_ids = sorted(  
+                        [e.serial_id for e in ex_list],  
+                        key=lambda sid: sid in equip_on_unit,  
+                    )  
+                    on_others = [(equip_on_unit[sid], sid) for sid in serial_ids if sid in equip_on_unit and equip_on_unit[sid][0] != unit_id]  
+                    candidates.append((ex_id, star, equip_name, attr_str, power, serial_ids, on_others, ""))  
   
             slot_candidates[slot_id] = candidates  
   
@@ -2024,52 +2069,90 @@ class one_click_ex_equip(Module):
                             if val and val != 0:  
                                 cur_attr_parts.append(f"{ch_name}{int(val)}")  
                     cur_attr_str = "/".join(cur_attr_parts) if cur_attr_parts else "无属性"  
-                    self._log(f"  槽位{slot_id}: {name}★{star} 战力+{cur_power} ({cur_attr_str})")  
+                    # 彩装额外显示词条  
+                    if db.ex_equipment_data[ex.ex_equipment_id].rarity == 5:  
+                        sub_str = db.get_ex_equip_sub_status_str(ex.ex_equipment_id, ex.sub_status or [])  
+                        self._log(f"[ex:{ex.ex_equipment_id}]  槽位{slot_id}: {name}★{star} 战力+{cur_power} ({cur_attr_str}) 词条:{sub_str}") 
+                    else:  
+                        self._log(f"[ex:{ex.ex_equipment_id}]  槽位{slot_id}: {name}★{star} 战力+{cur_power} ({cur_attr_str})") 
   
             for slot_id in [1, 2, 3]:  
                 cands = slot_candidates[slot_id]  
                 self._log(f"\n【槽位{slot_id}】共{len(cands)}种穿法：")  
-                for idx, (ex_id, star, name, attr_str, power, serial_ids, on_others) in enumerate(cands, start=1):  
+                for idx, (ex_id, star, name, attr_str, power, serial_ids, on_others, sub_str) in enumerate(cands, start=1):  
                     owner_info = ""  
-                    if on_others:  
-                        owners = [f"{db.get_unit_name(oid)}槽{oslot}" for (oid, oslot), _ in on_others]  
-                        free_cnt = len(serial_ids) - len(on_others)  
-                        owner_info = f" [共{len(serial_ids)}件"  
-                        if free_cnt > 0:  
+                    if on_others:    
+                        # 给每个在他人身上的装备加字母标记    
+                        MAX_OWNER_DISPLAY = 7  
+                        owner_parts = []    
+                        for letter_idx, ((oid, oslot), _sid) in enumerate(on_others):    
+                            letter = chr(ord('A') + letter_idx)    
+                            owner_parts.append(f"{letter}:{db.get_unit_name(oid)}槽{oslot}")    
+                        on_self_cnt = sum(1 for sid in serial_ids if sid in equip_on_unit and equip_on_unit[sid][0] == unit_id)    
+                        free_cnt = len(serial_ids) - len(on_others) - on_self_cnt    
+                        owner_info = f" [共{len(serial_ids)}件"    
+                        if on_self_cnt > 0:    
+                            owner_info += f", {on_self_cnt}件已穿戴"    
+                        if free_cnt > 0:    
                             owner_info += f", {free_cnt}件空闲"  
-                        owner_info += f", {', '.join(owners)}]"  
-                    self._log(f"  {idx}. {name}★{star} 战力+{power} ({attr_str}){owner_info}")  
+                        if len(owner_parts) > MAX_OWNER_DISPLAY:  
+                            displayed = ', '.join(owner_parts[:MAX_OWNER_DISPLAY])  
+                            owner_info += f", {displayed}, ...等{len(owner_parts)}人穿戴]"  
+                        else:  
+                            owner_info += f", {', '.join(owner_parts)}]" 
+                    sub_info = f" 词条:{sub_str}" if sub_str else ""  
+                    self._log(f"[ex:{ex_id}]  {idx}. {name}★{star} 战力+{power} ({attr_str}){sub_info}{owner_info}") 
                 if not cands:  
-                    self._log(f"  无可用装备") 
+                    self._log(f"  无可用装备")  
         else:  
-            # Equip mode: parse space-separated selection like "1 1 2"  
+            # Equip mode: parse space-separated selection like "1 1 2" or "1A 1 2"  
+            import re as _re  
             parts = selection.split()  
             if len(parts) != 3:  
                 raise AbortError(f"选择格式错误：请输入3个空格分隔的数字(如 1 1 2)或'试穿'，当前输入: {selection}")  
-            try:  
-                choices = [int(p) for p in parts]  
-            except ValueError:  
-                raise AbortError(f"选择格式错误：每个槽位必须是数字，当前输入: {selection}")  
   
             used_serial_ids = set()  
             selected = []  # list of (slot_id, serial_id, name, star, power)  
   
-            for slot_id, choice in enumerate(choices, start=1):  
+            for slot_id, part in enumerate(parts, start=1):  
                 cands = slot_candidates[slot_id]  
   
-                if choice == 0:  
+                if part == '0':  
                     continue  
   
-                if choice > len(cands):  
+                # 解析数字和可选字母后缀  
+                m = _re.match(r'^(\d+)([A-Za-z]?)$', part)  
+                if not m:  
+                    raise AbortError(f"槽位{slot_id}选择格式错误: {part}，请输入数字或数字+字母(如 1A)")  
+  
+                choice = int(m.group(1))  
+                letter = m.group(2).upper()  # '' or 'A'-'Z'  
+  
+                if choice < 1 or choice > len(cands):  
                     raise AbortError(f"槽位{slot_id}只有{len(cands)}种装备，无法选择第{choice}个")  
   
-                ex_id, star, name, attr_str, power, serial_ids, on_others = cands[choice - 1]  
+                ex_id, star, name, attr_str, power, serial_ids, on_others, sub_str = cands[choice - 1]  
   
                 target_serial = None  
-                for sid in serial_ids:  
-                    if sid not in used_serial_ids:  
-                        target_serial = sid  
-                        break  
+  
+                if letter:  
+                    # 用户指定了字母，从 on_others 中按字母索引选择  
+                    letter_index = ord(letter) - ord('A')  
+                    if letter_index < 0 or letter_index >= len(on_others):  
+                        available = [chr(ord('A') + i) + ':' + db.get_unit_name(oid) for i, ((oid, oslot), _sid) in enumerate(on_others)]  
+                        if not available:  
+                            raise AbortError(f"槽位{slot_id}编号{choice}没有在他人身上的装备，不需要字母后缀")  
+                        raise AbortError(f"槽位{slot_id}编号{choice}字母{letter}超出范围，可选: {', '.join(available)}")  
+                    (owner_uid, owner_slot), target_serial = on_others[letter_index]  
+                    if target_serial in used_serial_ids:  
+                        raise AbortError(f"槽位{slot_id}: {name}★{star} 的{letter}号装备已被其他槽位选用")  
+                else:  
+                    # 无字母，按原逻辑选第一个可用的  
+                    for sid in serial_ids:  
+                        if sid not in used_serial_ids:  
+                            target_serial = sid  
+                            break  
+  
                 if target_serial is None:  
                     raise AbortError(f"槽位{slot_id}: {name}★{star} 无可用装备(已被其他槽位选用)")  
   
@@ -2139,3 +2222,127 @@ class one_click_ex_equip(Module):
                     )])  
   
             self._log(f"已为{unit_name}装备完成！")
+
+@texttype("target_viewer_id", "玩家ID", "")  
+@description('向指定玩家发送好友请求')  
+@name('加好友')  
+@default(False)  
+class add_friend(Module):  
+    async def do_task(self, client: pcrclient):  
+        viewer_id_str: str = self.get_config("target_viewer_id").strip()  
+  
+        if not viewer_id_str:  
+            raise AbortError("请输入玩家ID")  
+  
+        if not viewer_id_str.isdigit():  
+            raise AbortError("玩家ID必须是数字")  
+  
+        viewer_id: int = int(viewer_id_str)  
+  
+        if viewer_id <= 0:  
+            raise AbortError("请输入有效的玩家ID")  
+  
+        self._log(f"正在处理玩家ID: {viewer_id}")  
+  
+        try:  
+            # 先获取玩家昵称  
+            profile_data = await client.get_profile(viewer_id)  
+            if not hasattr(profile_data, 'user_info') or not profile_data.user_info:  
+                raise AbortError(f"无法获取玩家 {viewer_id} 的信息")  
+              
+            user_name = profile_data.user_info.user_name  
+  
+            # 获取当前好友列表和好友上限  
+            from ...model.models import FriendFriendListRequest  
+            friend_list_req = FriendFriendListRequest()  
+            friend_list_response = await client.request(friend_list_req)  
+              
+            # 获取好友上限配置  
+            current_friend_count = len(friend_list_response.friend_list) if friend_list_response.friend_list else 0  
+              
+            # 获取用户信息中的好友数（作为备用）  
+            if hasattr(profile_data, 'user_info') and profile_data.user_info.friend_num is not None:  
+                current_friend_count = profile_data.user_info.friend_num  
+              
+            # 好友上限检测（公主连结好友上限通常是40）  
+            FRIEND_LIMIT = 40  
+            if current_friend_count >= FRIEND_LIMIT:  
+                self._log(f"好友数量已达上限 ({current_friend_count}/{FRIEND_LIMIT})，无法添加更多好友")  
+                return  
+              
+            # 检查是否已经是好友  
+            if friend_list_response.friend_list:  
+                for friend in friend_list_response.friend_list:  
+                    if friend.viewer_id == viewer_id:  
+                        self._log(f"玩家 {user_name}(ID: {viewer_id}) 已经是您的好友")  
+                        return  
+  
+            # 发送好友请求  
+            from ...model.models import FriendRequestRequest  
+            req = FriendRequestRequest()  
+            req.target_viewer_id = viewer_id  
+            await client.request(req)  
+  
+            self._log(f"成功向玩家 {user_name}(ID: {viewer_id}) 发送好友请求")  
+  
+        except Exception as e:  
+            self._log(f"发送好友请求失败: {e}")  
+            raise AbortError(f"无法向玩家 {viewer_id} 发送好友请求")
+
+@texttype("target_viewer_id", "玩家ID", "")  
+@description('删除指定好友')  
+@name('删好友')  
+@default(False)  
+class remove_friend(Module):  
+    async def do_task(self, client: pcrclient):  
+        viewer_id_str: str = self.get_config("target_viewer_id").strip()  
+  
+        if not viewer_id_str:  
+            raise AbortError("请输入玩家ID")  
+  
+        if not viewer_id_str.isdigit():  
+            raise AbortError("玩家ID必须是数字")  
+  
+        viewer_id: int = int(viewer_id_str)  
+  
+        if viewer_id <= 0:  
+            raise AbortError("请输入有效的玩家ID")  
+  
+        self._log(f"正在处理玩家ID: {viewer_id}")  
+  
+        try:  
+            # 先获取玩家昵称  
+            profile_data = await client.get_profile(viewer_id)  
+            if not hasattr(profile_data, 'user_info') or not profile_data.user_info:  
+                raise AbortError(f"无法获取玩家 {viewer_id} 的信息")  
+              
+            user_name = profile_data.user_info.user_name  
+  
+            # 获取当前好友列表  
+            from ...model.models import FriendFriendListRequest  
+            friend_list_req = FriendFriendListRequest()  
+            friend_list_response = await client.request(friend_list_req)  
+              
+            # 检查是否是好友  
+            is_friend = False  
+            if friend_list_response.friend_list:  
+                for friend in friend_list_response.friend_list:  
+                    if friend.viewer_id == viewer_id:  
+                        is_friend = True  
+                        break  
+              
+            if not is_friend:  
+                self._log(f"玩家 {user_name}(ID: {viewer_id}) 不是您的好友")  
+                return  
+  
+            # 删除好友  
+            from ...model.models import FriendRemoveRequest  
+            req = FriendRemoveRequest()  
+            req.target_viewer_id = viewer_id  
+            await client.request(req)  
+  
+            self._log(f"成功删除好友 {user_name}(ID: {viewer_id})")  
+  
+        except Exception as e:  
+            self._log(f"删除好友失败: {e}")  
+            raise AbortError(f"无法删除好友 {viewer_id}")

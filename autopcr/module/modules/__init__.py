@@ -180,6 +180,9 @@ unit_modules = ModuleList(
         unit_exceed,
         unit_evolution,
         search_ex_equip_id,
+        equip_rainbow_ex,
+        equip_pink_ex,
+        equip_gold_ex,
     ]
 )
 
@@ -216,6 +219,9 @@ tool_modules = ModuleList(
 		set_cb_support,#会战支援
 		set_dungeon_support,  
         set_friend_support,
+		add_friend,
+        remove_friend,
+        remove_normal_ex_equip,
         find_talent_quest,
 		search_ex_equip_id,
         find_clan_talent_quest,

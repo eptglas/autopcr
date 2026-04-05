@@ -150,8 +150,10 @@ app = nonebot.get_bot().server_app
 QuartAuth(app, cookie_secure=False)
 RateLimiter(app)
 Compress(app)
-app.secret_key = secrets.token_urlsafe(16) # cookie expires when reboot
+app.secret_key = secrets.token_urlsafe(16)  # cookie expires when reboot
 app.register_blueprint(server.app)
+# 自动换防停止事件字典，key: sender_qq, value: asyncio.Event  
+_auto_def_stop_events = {}
 
 prefix = '#'
 
@@ -164,7 +166,6 @@ sv_help = f"""
 - {prefix}日常报告 [0|1|2|3] 最近四次清日常报告
 - {prefix}定时日志 查看定时运行状态
 - {prefix}查角色 [昵称] 查看角色练度
-- {prefix}查缺称号 查看缺少的称号
 - {prefix}查缺角色 查看缺少的限定常驻角色
 - {prefix}查ex装备 [会战] 查看ex装备库存
 - {prefix}查探险编队 根据记忆碎片角色编队战力相当的队伍
@@ -173,16 +174,14 @@ sv_help = f"""
 - {prefix}查纯净碎片 查询缺口纯净碎片，国服六星+日服二专需求
 - {prefix}查记忆碎片 [可刷取|大师币] 查询缺口记忆碎片，可按地图可刷取或大师币商店过滤
 - {prefix}查装备 [<rank>] [fav] 查询缺口装备，rank为数字，只查询>=rank的角色缺口装备，fav表示只查询favorite的角色
-- {prefix}查深域 查询深域通关情况
-- {prefix}查公会深域 查询公会深域通关情况
 - {prefix}刷图推荐 [<rank>] [fav] 查询缺口装备的刷图推荐，格式同上
 - {prefix}公会支援 查询公会支援角色配置
 - {prefix}卡池 查看当前卡池
-- {prefix}编队 1 1 春妈 蝶妈 狗妈 水妈 礼妈 便捷设置编队
-- {prefix}一键编队 1 1 队名1 星级角色1 星级角色2 ... 星级角色5 队名2 星级角色1 星级角色2 END 设置多队编队，队伍不足5人以END结尾
-- {prefix}半月刊 查看半月刊
-- {prefix}识图 [图片] 识别图片中的角色，返回一键编队文本
+- {prefix}半月刊
+- {prefix}返钻
+- {prefix}查box 角色名（or所有）
 - {prefix}刷新box
+- {prefix}查缺称号 查看缺少的称号
 - {prefix}jjc透视 查前51名
 - {prefix}pjjc透视 查前51名
 - {prefix}jjc回刺 比如 #jjc回刺 19 2 就是打19 选择阵容2进攻
@@ -190,16 +189,41 @@ sv_help = f"""
 - {prefix}pjjc换防 将pjjc防守阵容随机错排
 - {prefix}免费十连 <卡池id> 卡池id来自【{prefix}卡池】
 - {prefix}来发十连 <卡池id> [抽到出] [单抽券|单抽] [编号小优先] [开抽] 赛博抽卡，谨慎使用。卡池id来自【{prefix}卡池】，[抽到出]表示抽到出货或达天井，默认十连，[单抽券]表示仅用厕纸，[单抽]表示宝石单抽，[标号小优先]指智能pickup时优先选择编号小的角色，[开抽]表示确认抽卡。已有up也可再次触发。
+- {prefix}智能刷h图
+- {prefix}智能刷外传
+- {prefix}刷专二
+- {prefix}查深域
+- {prefix}强化ex装
+- {prefix}合成ex装 
+- {prefix}穿ex彩装 角色名 彩装ID  示例：#穿ex彩装 凯露 12345  #查ex装备 看ID
+- {prefix}穿ex粉装 角色名 粉装serial_id    #查ID 看ID
+- {prefix}穿ex金装 角色名 金装serial_id    #查ID 看ID
+- {prefix}查ID 泪          ← 模糊匹配，会匹配所有名称含"泪"的装备
+- {prefix}领小屋体力
+- {prefix}公会点赞
+- {prefix}领每日体力
+- {prefix}领取礼物箱
+- {prefix}查公会深域进度
+- {prefix}收菜  探险续航哦
+- {prefix}一键编队 1 1 队名1 星级角色1 星级角色2 ... 星级角色5 队名2 星级角色1 星级角色2 设置多队编队，队伍不足5人结尾
+- {prefix}导入编队 第几页 第几队  如 #导入编队 1 1  ，代表第一页第一队
+- {prefix}识图   用于提取图中队伍
+- {prefix}兑天井 卡池id 角色名 如 #兑天井 10283 火电  用 #卡池 获取ID  
+- {prefix}拉角色练度 339 31 339 339 339 339 5 5 5 5 5 5 0 0 可可萝     #代表 等级 品级 ub s1 s2 ex 装备星级 专武1 专武2 角色名（不输入则全选）
 - {prefix}大富翁 [保留的骰子数量] [搬空商店为止|不止搬空商店] [到达次数]运行大富翁游戏，支持设置保留骰子数量和是否搬空商店后停止
   示例：{prefix}大富翁 30 不止搬空商店 0 | {prefix}大富翁所有 0 搬空商店为止  0（需要去批量运行里保存账号）
 - {prefix}商店购买 [上期|当期] 购买大富翁商店物品，默认购买当期
   示例：{prefix}商店购买 上期 | {prefix}商店购买所有 当期 （需要去批量运行里保存账号）
 - {prefix}查玩家 uid
-- {prefix}挂地下城/会战/好友支援 角色1 [角色2]  设置角色为会战支援并穿满会战EX装（最多2个）
+- {prefix}炼金 物贯 物贯 物贯 物贯 1 彩装ID +(看属性/看概率/炼成)  炼成之前去网站设置参数《1代表属性总值，需要自己改》
+- {prefix}撤下会战ex装
+- {prefix}撤下普通ex装
+- {prefix}买记忆碎片 可可萝 5 0 开买 界限突破  #分别代表:角色 星级 专武 是否购买 是否突破
+- {prefix}角色升星 5 忽略盈余 升至最高 佩可  #分别代表 星级 是否保留盈余如突破碎片 升到可升最高星 角色名
+- {prefix}角色突破 忽略盈余 凯露 佩可（忽略盈余：选这个，碎片不溢出就不突破）
+- {prefix}pjjc自动换防
+- {prefix}挂地下城/会战/好友支援 [星级]角色1 [[星级]角色2]  设置角色为支援，星级可选(3/4/5)，如：#挂好友支援 3水电
 - {prefix}一键穿ex +角色名 试穿/数字 1 2 3      数字0表示不改动     
-- {prefix}穿ex彩装 角色名 彩装ID  示例：#穿ex彩装 凯露 12345  #查ex装备 看ID
-- {prefix}穿ex粉装 角色名 粉装serial_id    #查ID 看ID
-- {prefix}穿ex金装 角色名 金装serial_id    #查ID 看ID
 """.strip()
 
 if address is None:
@@ -975,8 +999,8 @@ async def tool_used(botev: BotEvent, tool: ToolInfo, config: Dict[str, str], acc
         resp = resp.get_result()
         
         # 仅对查公会深域进度工具生成图片
-        if tool.key == "find_clan_talent_quest":
-            # 生成深域进度图片
+        if tool.key in ["find_clan_talent_quest", "get_box_table", "search_unit", "find_talent_quest", "one_click_ex_equip", "search_ex_equip_id", "set_cb_support", "set_dungeon_support", "set_friend_support"]:
+            # 生成图片
             img = await drawer.draw_task_result(resp)
             msg = f"{alias}"
             msg += outp_b64(img)
@@ -1611,101 +1635,303 @@ async def ocr_team(botev: BotEvent):
     )
     await botev.finish(msg)
 
-
-@register_tool("挂会战支援", "set_cb_support")  
-async def set_cb_support(botev: BotEvent):  
-    msg = await botev.message()  
-    await botev.send("请稍等")  
-  
-    units = []  
-    unknown_units = []  
-    for _ in range(2):  
+@sv.on_prefix(f"{prefix}pjjc自动换防")  
+@wrap_hoshino_event  
+@wrap_accountmgr  
+@wrap_account  
+async def pjjc_auto_def_switch(botev: BotEvent, acc):  
+    import time as _time  
+    import random  
+    import itertools  
+    from datetime import datetime as dt  
+      
+    alias = getattr(acc, 'alias', '未知账号')  
+    sender_qq = await botev.send_qq()  
+      
+    # 检查是否已有运行中的任务  
+    if sender_qq in _auto_def_stop_events:  
+        await botev.finish(f"已有正在运行的自动换防任务，请先发送 {prefix}终止换防")  
+      
+    duration = 1800  # 30分钟  
+    interval = 3   # 3秒  
+    shuffle_count = 0  
+      
+    stop_event = asyncio.Event()  
+    _auto_def_stop_events[sender_qq] = stop_event  
+      
+    try:  
+        client = acc.client  
+        await client.activate()  
+          
+        # Login if needed (参考 autopcr/module/modulebase.py 中 Module.do_from 的登录逻辑)  
+        from .autopcr.core.pcrclient import eLoginStatus  
+        if client.logged == eLoginStatus.NOT_LOGGED or not client.data.ready:  
+            await client.login()  
+          
+        # Get initial history baseline  
+        history_resp = await client.get_grand_arena_history()  
+        known_log_ids = set()  
+        if history_resp.grand_arena_history_list:  
+            for h in history_resp.grand_arena_history_list:  
+                known_log_ids.add(h.log_id)  
+          
+        await botev.send(f"{alias} pjjc自动换防已开启，持续30分钟，每3秒检查一次被刺记录\n发送 {prefix}终止换防 可提前停止")  
+          
+        start_time = _time.time()  
+          
+        while _time.time() - start_time < duration:  
+            # 用 wait_for 替代 sleep，这样收到终止信号时可以立即响应  
+            try:  
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)  
+                # 如果到这里，说明 stop_event 被 set 了（用户发送了终止换防）  
+                await botev.send(f"{alias} 收到终止信号，自动换防已停止，共执行换防{shuffle_count}次")  
+                client.deactivate()  
+                return  
+            except asyncio.TimeoutError:  
+                # 正常超时，继续检查历史记录  
+                pass  
+              
+            try:  
+                # Query current history  
+                history_resp = await client.get_grand_arena_history()  
+                if not history_resp.grand_arena_history_list:  
+                    continue  
+                  
+                # Check for new 被刺 records  
+                new_attacks = []  
+                for h in history_resp.grand_arena_history_list:  
+                    if h.log_id not in known_log_ids:  
+                        known_log_ids.add(h.log_id)  
+                        # is_challenge == 0 means 被刺 (you were attacked)  
+                        # 注意：如果列表项的 is_challenge 不可靠，需改用 get_grand_arena_history_detail  
+                        if not h.is_challenge:  
+                            opponent = h.opponent_user  
+                            attack_time = dt.fromtimestamp(h.versus_time)  
+                            new_attacks.append(f"{opponent.user_name}({opponent.viewer_id}) {attack_time} 被刺")  
+                  
+                if new_attacks:  
+                    # Notify about detected attacks  
+                    attack_msg = "\n".join(new_attacks)  
+                    await botev.send(f"{alias} 检测到新的被刺记录：\n{attack_msg}\n正在执行换防...")  
+                      
+                    # --- Inline pjjc_def_shuffle_team logic (from autopcr/module/modules/tools.py lines 950-964) ---  
+                    from .autopcr.model.common import DeckListData  
+                    from .autopcr.model.enums import ePartyType  
+                      
+                    # Check rate limit  
+                    info = await client.get_grand_arena_info()  
+                    limit_info = info.update_deck_times_limit  
+                    if limit_info.round_times == limit_info.round_max_limited_times:  
+                        ok_time = db.format_time(db.parse_time(limit_info.round_end_time))  
+                        await botev.send(f"{alias} 已达到换防次数上限{limit_info.round_max_limited_times}，请于{ok_time}后再试，自动换防终止")  
+                        break  
+                    if limit_info.daily_times == limit_info.daily_max_limited_times:  
+                        await botev.send(f"{alias} 已达到每日换防次数上限{limit_info.daily_max_limited_times}，自动换防终止")  
+                        break  
+                      
+                    limit_msg = ""  
+                    if limit_info.round_times:  
+                        limit_msg = f"{db.format_time(db.parse_time(limit_info.round_end_time))}刷新"  
+                      
+                    # Generate shuffle permutation (derangement)  
+                    team_cnt = 3  
+                    teams = [list(x) for x in itertools.permutations(range(team_cnt))]  
+                    teams = [x for x in teams if all(x[i] != i for i in range(team_cnt))]  
+                    ids = random.choice(teams)  
+                      
+                    # Build deck list  
+                    deck_list = []  
+                    for i in range(team_cnt):  
+                        deck_number_src = getattr(ePartyType, f"GRAND_ARENA_DEF_{i + 1}")  
+                        units = client.data.deck_list[deck_number_src]  
+                        units_id = [getattr(units, f"unit_id_{j + 1}") for j in range(5)]  
+                          
+                        deck = DeckListData()  
+                        deck.deck_number = getattr(ePartyType, f"GRAND_ARENA_DEF_{ids[i] + 1}")  
+                        deck.unit_list = units_id  
+                        deck_list.append(deck)  
+                      
+                    deck_list.sort(key=lambda x: x.deck_number)  
+                    await client.deck_update_list(deck_list)  
+                      
+                    shuffle_msg = '\n'.join([f"队伍{i+1} -> 位置{ids[i]+1}" for i in range(team_cnt)])  
+                    await botev.send(  
+                        f"{alias} 换防完成！\n"  
+                        f"{shuffle_msg}\n"  
+                        f"本轮换防次数{limit_info.round_times + 1}/{limit_info.round_max_limited_times}，{limit_msg}\n"  
+                        f"今日换防次数{limit_info.daily_times + 1}/{limit_info.daily_max_limited_times}"  
+                    )  
+                    shuffle_count += 1  
+                    # 注意：换防后不 break，继续监控  
+                      
+            except Exception as e:  
+                logger.error(f"pjjc自动换防检查出错: {str(e)}")  
+                await botev.send(f"{alias} 检查出错: {str(e)[:200]}")  
+                try:  
+                    if client.logged == eLoginStatus.NOT_LOGGED:  
+                        await client.login()  
+                except:  
+                    await botev.send(f"{alias} 重新登录失败，自动换防终止")  
+                    break  
+          
+        client.deactivate()  
+        if shuffle_count > 0:  
+            await botev.send(f"{alias} pjjc自动换防已结束（30分钟到期），共执行换防{shuffle_count}次")  
+        else:  
+            await botev.send(f"{alias} pjjc自动换防已结束（30分钟内未检测到被刺）")  
+          
+    except Exception as e:  
         try:  
-            unit_name = msg[0]  
-            unit = get_id_from_name(unit_name)  
-            if unit:  
-                units.append(unit * 100 + 1)  
-            else:  
-                unknown_units.append(unit_name)  
-            del msg[0]  
+            client.deactivate()  
         except:  
-            break  
+            pass  
+        await botev.send(f"{alias} pjjc自动换防异常终止: {str(e)[:300]}")  
+    finally:  
+        _auto_def_stop_events.pop(sender_qq, None)
+        
+@sv.on_fullmatch(f"{prefix}终止换防")  
+@wrap_hoshino_event  
+async def pjjc_stop_auto_def(botev: BotEvent):  
+    sender_qq = await botev.send_qq()  
+    if sender_qq in _auto_def_stop_events:  
+        _auto_def_stop_events[sender_qq].set()  
+        # 不需要在这里发送"已停止"，监控循环会发送停止消息  
+    else:  
+        await botev.send("当前没有正在运行的自动换防任务")
+
+@register_tool("挂会战支援", "set_cb_support")    
+async def set_cb_support(botev: BotEvent):    
+    msg = await botev.message()    
+    await botev.send("请稍等")    
   
-    if unknown_units:  
-        await botev.finish(f"未知昵称{', '.join(unknown_units)}")  
+    units = []    
+    stars = []    
+    unknown_units = []    
+    for _ in range(2):    
+        try:    
+            unit_name = msg[0]    
+            unit = get_id_from_name(unit_name)    
+            if unit:    
+                units.append(unit * 100 + 1)    
+                stars.append(0)    
+            else:    
+                if unit_name[0].isdigit():    
+                    star = int(unit_name[0])    
+                    unit = get_id_from_name(unit_name[1:])    
+                    if unit:    
+                        units.append(unit * 100 + 1)    
+                        stars.append(star)    
+                    else:    
+                        unknown_units.append(unit_name)    
+                else:    
+                    unknown_units.append(unit_name)    
+            del msg[0]    
+        except:    
+            break    
   
-    if not units:  
-        await botev.finish("请指定至少一个角色，如：#挂会战支援 角色1 角色2")  
+    if unknown_units:    
+        await botev.finish(f"未知昵称{', '.join(unknown_units)}")    
   
-    config = {  
-        "set_cb_support_unit_id_1": units[0],  
-        "set_cb_support_unit_id_2": units[1] if len(units) > 1 else units[0],  
-    }  
+    if not units:    
+        await botev.finish("请指定至少一个角色，如：#挂会战支援 角色1 角色2")    
+  
+    config = {    
+        "set_cb_support_unit_id_1": units[0],    
+        "set_cb_support_unit_id_2": units[1] if len(units) > 1 else units[0],    
+        "set_cb_support_star_1": stars[0],    
+        "set_cb_support_star_2": stars[1] if len(stars) > 1 else stars[0],    
+    }    
     return config
 
 
   
-@register_tool("挂地下城支援", "set_dungeon_support")  
-async def set_dungeon_support(botev: BotEvent):  
-    msg = await botev.message()  
-    await botev.send("请稍等")  
+@register_tool("挂地下城支援", "set_dungeon_support")    
+async def set_dungeon_support(botev: BotEvent):    
+    msg = await botev.message()    
+    await botev.send("请稍等")    
   
-    units = []  
-    unknown_units = []  
-    for _ in range(2):  
-        try:  
-            unit_name = msg[0]  
-            unit = get_id_from_name(unit_name)  
-            if unit:  
-                units.append(unit * 100 + 1)  
-            else:  
-                unknown_units.append(unit_name)  
-            del msg[0]  
-        except:  
-            break  
+    units = []    
+    stars = []    
+    unknown_units = []    
+    for _ in range(2):    
+        try:    
+            unit_name = msg[0]    
+            unit = get_id_from_name(unit_name)    
+            if unit:    
+                units.append(unit * 100 + 1)    
+                stars.append(0)  # 0 means no change  
+            else:    
+                if unit_name[0].isdigit():    
+                    star = int(unit_name[0])    
+                    unit = get_id_from_name(unit_name[1:])    
+                    if unit:    
+                        units.append(unit * 100 + 1)    
+                        stars.append(star)    
+                    else:    
+                        unknown_units.append(unit_name)    
+                else:    
+                    unknown_units.append(unit_name)    
+            del msg[0]    
+        except:    
+            break    
   
-    if unknown_units:  
-        await botev.finish(f"未知昵称{', '.join(unknown_units)}")  
+    if unknown_units:    
+        await botev.finish(f"未知昵称{', '.join(unknown_units)}")    
   
-    if not units:  
-        await botev.finish("请指定至少一个角色，如：#挂地下城支援 角色1 角色2")  
+    if not units:    
+        await botev.finish("请指定至少一个角色，如：#挂地下城支援 角色1 角色2")    
   
-    config = {  
-        "set_dungeon_support_unit_id_1": units[0],  
-        "set_dungeon_support_unit_id_2": units[1] if len(units) > 1 else units[0],  
-    }  
-    return config  
+    config = {    
+        "set_dungeon_support_unit_id_1": units[0],    
+        "set_dungeon_support_unit_id_2": units[1] if len(units) > 1 else units[0],    
+        "set_dungeon_support_star_1": stars[0],    
+        "set_dungeon_support_star_2": stars[1] if len(stars) > 1 else stars[0],    
+    }    
+    return config
   
   
-@register_tool("挂好友支援", "set_friend_support")  
-async def set_friend_support(botev: BotEvent):  
-    msg = await botev.message()  
-    await botev.send("请稍等")  
+@register_tool("挂好友支援", "set_friend_support")    
+async def set_friend_support(botev: BotEvent):    
+    msg = await botev.message()    
+    await botev.send("请稍等")    
   
-    units = []  
-    unknown_units = []  
-    for _ in range(2):  
-        try:  
-            unit_name = msg[0]  
-            unit = get_id_from_name(unit_name)  
-            if unit:  
-                units.append(unit * 100 + 1)  
-            else:  
-                unknown_units.append(unit_name)  
-            del msg[0]  
-        except:  
-            break  
+    units = []    
+    stars = []    
+    unknown_units = []    
+    for _ in range(2):    
+        try:    
+            unit_name = msg[0]    
+            unit = get_id_from_name(unit_name)    
+            if unit:    
+                units.append(unit * 100 + 1)    
+                stars.append(0)    
+            else:    
+                if unit_name[0].isdigit():    
+                    star = int(unit_name[0])    
+                    unit = get_id_from_name(unit_name[1:])    
+                    if unit:    
+                        units.append(unit * 100 + 1)    
+                        stars.append(star)    
+                    else:    
+                        unknown_units.append(unit_name)    
+                else:    
+                    unknown_units.append(unit_name)    
+            del msg[0]    
+        except:    
+            break    
   
-    if unknown_units:  
-        await botev.finish(f"未知昵称{', '.join(unknown_units)}")  
+    if unknown_units:    
+        await botev.finish(f"未知昵称{', '.join(unknown_units)}")    
   
-    if not units:  
-        await botev.finish("请指定至少一个角色，如：#挂好友支援 角色1 角色2")  
+    if not units:    
+        await botev.finish("请指定至少一个角色，如：#挂好友支援 角色1 角色2")    
   
-    config = {  
-        "set_friend_support_unit_id_1": units[0],  
-        "set_friend_support_unit_id_2": units[1] if len(units) > 1 else units[0],  
-    }  
+    config = {    
+        "set_friend_support_unit_id_1": units[0],    
+        "set_friend_support_unit_id_2": units[1] if len(units) > 1 else units[0],    
+        "set_friend_support_star_1": stars[0],    
+        "set_friend_support_star_2": stars[1] if len(stars) > 1 else stars[0],    
+    }    
     return config
 
 @register_tool("穿ex彩装", "equip_rainbow_ex")  
@@ -1863,3 +2089,38 @@ async def search_ex_equip_id(botev: BotEvent):
         "search_ex_equip_name": equip_name,  
     }
 
+@register_tool("加好友", "add_friend")
+async def add_friend(botev: BotEvent):
+    msg = await botev.message()
+    target_viewer_id = ""
+    try:
+        target_viewer_id = msg[0]
+        del msg[0]
+    except:
+        await botev.finish("请输入玩家ID")
+    
+    if not target_viewer_id.isdigit():
+        await botev.finish("玩家ID必须是数字")
+    
+    config = {
+        "target_viewer_id": target_viewer_id
+    }
+    return config
+
+@register_tool("删好友", "remove_friend")
+async def remove_friend(botev: BotEvent):
+    msg = await botev.message()
+    target_viewer_id = ""
+    try:
+        target_viewer_id = msg[0]
+        del msg[0]
+    except:
+        await botev.finish("请输入玩家ID")
+    
+    if not target_viewer_id.isdigit():
+        await botev.finish("玩家ID必须是数字")
+    
+    config = {
+        "target_viewer_id": target_viewer_id
+    }
+    return config
